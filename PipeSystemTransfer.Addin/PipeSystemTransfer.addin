@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>PipeSystemTransfer</Name>
+    <FullClassName>PipeSystemTransfer.Addin.App</FullClassName>
+    <Assembly>D:\BAO\MAJOR\AutoCad\PipeSystemTransfer\PipeSystemTransfer.Addin\bin\Debug\PipeSystemTransfer.Addin.dll</Assembly>
+    <AddInId>4064C544-EFAC-4EDF-8693-A78444C2DA9C</AddInId>
+    <VendorId>BAO</VendorId>
+    <VendorDescription>MEP Automation</VendorDescription>
+  </AddIn>
+
+  <AddIn Type="Command">
+    <Name>ExportPipeSystem</Name>
+    <FullClassName>PipeSystemTransfer.Addin.Commands.CommandExport</FullClassName>
+    <Text>Xuất JSON</Text>
+    <Description>Xuất toàn bộ hệ thống ống ra file JSON</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <Assembly>D:\BAO\MAJOR\AutoCad\PipeSystemTransfer\PipeSystemTransfer.Addin\bin\Debug\PipeSystemTransfer.Addin.dll</Assembly>
+    <AddInId>1A2B3C4D-AAAA-BBBB-CCCC-000000000001</AddInId>
+    <VendorId>BAO</VendorId>
+    <VendorDescription>MEP Automation</VendorDescription>
+  </AddIn>
+
+  <AddIn Type="Command">
+    <Name>ImportPipeSystem</Name>
+    <FullClassName>PipeSystemTransfer.Addin.Commands.CommandImport</FullClassName>
+    <Text>Import JSON</Text>
+    <Description>Import hệ thống ống từ file JSON vào bản vẽ hiện tại</Description>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+    <Assembly>D:\BAO\MAJOR\AutoCad\PipeSystemTransfer\PipeSystemTransfer.Addin\bin\Debug\PipeSystemTransfer.Addin.dll</Assembly>
+    <AddInId>1A2B3C4D-AAAA-BBBB-CCCC-000000000002</AddInId>
+    <VendorId>BAO</VendorId>
+    <VendorDescription>MEP Automation</VendorDescription>
+  </AddIn>
+</RevitAddIns>
