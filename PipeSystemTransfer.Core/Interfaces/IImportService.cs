@@ -18,6 +18,7 @@ namespace PipeSystemTransfer.Core.Interfaces
         public int FailedElements { get; set; }
         public string ErrorMessage { get; set; }
         public HashSet<string> MissingFamilies { get; set; } = new HashSet<string>();
+        public List<string> ErrorLog { get; set; } = new List<string>();
 
         public int TotalCreated => CreatedPipes + CreatedFittings;
     }

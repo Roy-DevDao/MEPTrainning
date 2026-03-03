@@ -1,11 +1,12 @@
-using System;
-using System.Linq;
-using System.Windows.Input;
-using System.Windows.Threading;
 using Microsoft.Win32;
 using PipeSystemTransfer.Core.Interfaces;
 using PipeSystemTransfer.Core.Models;
 using PipeSystemTransfer.UI.Common;
+using System;
+using System.IO;
+using System.Linq;
+using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace PipeSystemTransfer.UI.ViewModels
 {
@@ -132,6 +133,28 @@ namespace PipeSystemTransfer.UI.ViewModels
                              + string.Join("\n• ", shown);
                         if (more > 0)
                             msg += $"\n• ... và {more} family khác";
+                    }
+                    if (result.ErrorLog.Count > 0)
+                    {
+                        try
+                        {
+                            var logFolder = @"D:\BAO";
+
+                            if (!Directory.Exists(logFolder))
+                                Directory.CreateDirectory(logFolder);
+
+                            var logPath = Path.Combine(
+                                logFolder,
+                                $"PipeImport_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+
+                            File.WriteAllLines(logPath, result.ErrorLog);
+
+                            msg += $"\n\nLog lỗi ({result.ErrorLog.Count} dòng): {logPath}";
+                        }
+                        catch (Exception ex)
+                        {
+                            msg += $"\nKhông ghi được log: {ex.Message}";
+                        }
                     }
                     StatusMessage = msg;
                 }

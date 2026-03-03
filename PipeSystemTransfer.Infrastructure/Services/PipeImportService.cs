@@ -52,7 +52,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
                             onProgress, ref current, total, createdFittings);
 
                         Report(onProgress, current, total, "Nối kết nối...");
-                        result.JoinedConnectors = ConnectAllElements(createdPipes, createdFittings);
+                        result.JoinedConnectors = ConnectAllElements(createdPipes, createdFittings, result.ErrorLog);
 
                         tx.Commit();
                         result.Success = true;
@@ -119,9 +119,15 @@ namespace PipeSystemTransfer.Infrastructure.Services
                     var level      = levelMap.TryGetValue(dto.LevelName, out var lv) ? lv : defaultLevel;
                     var systemType = systemTypeMap.TryGetValue(dto.SystemType, out var st) ? st : defaultSystem;
 
-                    if (pipeType == null || level == null)
+                    if (pipeType == null)
                     {
                         result.FailedElements++;
+                        result.ErrorLog.Add($"[Pipe {dto.RevitId}] PipeType '{dto.PipeTypeName}' không có trong file đích");
+                    }
+                    else if (level == null)
+                    {
+                        result.FailedElements++;
+                        result.ErrorLog.Add($"[Pipe {dto.RevitId}] Level '{dto.LevelName}' không có trong file đích");
                     }
                     else
                     {
@@ -131,6 +137,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
                         if (start.DistanceTo(end) < 0.001)
                         {
                             result.FailedElements++;
+                            result.ErrorLog.Add($"[Pipe {dto.RevitId}] Chiều dài < 0.001 ft, bỏ qua");
                         }
                         else
                         {
@@ -144,10 +151,19 @@ namespace PipeSystemTransfer.Infrastructure.Services
                                 createdPipes.Add(pipe);
                                 count++;
                             }
+                            else
+                            {
+                                result.FailedElements++;
+                                result.ErrorLog.Add($"[Pipe {dto.RevitId}] Pipe.Create() trả về null");
+                            }
                         }
                     }
                 }
-                catch { result.FailedElements++; }
+                catch (Exception ex)
+                {
+                    result.FailedElements++;
+                    result.ErrorLog.Add($"[Pipe {dto.RevitId}] {ex.GetType().Name}: {ex.Message}");
+                }
                 Report(onProgress, ++current, total, $"Tạo ống {count}/{pipes.Count}");
             }
             return count;
@@ -171,6 +187,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
                     {
                         result.FailedElements++;
                         result.MissingFamilies.Add($"{dto.FamilyName} : {dto.TypeName}");
+                        result.ErrorLog.Add($"[Fitting {dto.RevitId}] Family không có trong file đích: '{dto.FamilyName}' / '{dto.TypeName}'");
                     }
                     else
                     {
@@ -178,6 +195,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
                         if (level == null)
                         {
                             result.FailedElements++;
+                            result.ErrorLog.Add($"[Fitting {dto.RevitId}] Level '{dto.LevelName}' không có trong file đích");
                         }
                         else
                         {
@@ -192,10 +210,19 @@ namespace PipeSystemTransfer.Infrastructure.Services
                                 createdFittings.Add(instance);
                                 count++;
                             }
+                            else
+                            {
+                                result.FailedElements++;
+                                result.ErrorLog.Add($"[Fitting {dto.RevitId}] NewFamilyInstance() trả về null: '{dto.FamilyName}' / '{dto.TypeName}'");
+                            }
                         }
                     }
                 }
-                catch { result.FailedElements++; }
+                catch (Exception ex)
+                {
+                    result.FailedElements++;
+                    result.ErrorLog.Add($"[Fitting {dto.RevitId}] {dto.FamilyName}/{dto.TypeName} — {ex.GetType().Name}: {ex.Message}");
+                }
                 Report(onProgress, ++current, total, $"Tạo fitting {count}/{fittings.Count}");
             }
             return count;
@@ -204,7 +231,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
         private static void Report(Action<ProgressReport> onProgress, int current, int total, string message)
             => onProgress?.Invoke(new ProgressReport { Current = current, Total = total, Message = message });
 
-        private int ConnectAllElements(List<Pipe> pipes, List<FamilyInstance> fittings)
+        private int ConnectAllElements(List<Pipe> pipes, List<FamilyInstance> fittings, List<string> errorLog)
         {
             var freeConns = new Dictionary<string, Connector>();
             int joined = 0;
@@ -212,7 +239,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
             foreach (var pipe in pipes)
                 foreach (Connector c in pipe.ConnectorManager.Connectors)
                     if (c.Domain == Domain.DomainPiping)
-                        TryJoin(freeConns, c, ref joined);
+                        TryJoin(freeConns, c, ref joined, errorLog);
 
             foreach (var fitting in fittings)
             {
@@ -220,13 +247,13 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 if (cm == null) continue;
                 foreach (Connector c in cm.Connectors)
                     if (c.Domain == Domain.DomainPiping)
-                        TryJoin(freeConns, c, ref joined);
+                        TryJoin(freeConns, c, ref joined, errorLog);
             }
 
             return joined;
         }
 
-        private static void TryJoin(Dictionary<string, Connector> map, Connector c, ref int joined)
+        private static void TryJoin(Dictionary<string, Connector> map, Connector c, ref int joined, List<string> errorLog)
         {
             var key = ConnKey(c.Origin);
             if (map.TryGetValue(key, out var other))
@@ -238,8 +265,15 @@ namespace PipeSystemTransfer.Infrastructure.Services
                         c.ConnectTo(other);
                         joined++;
                     }
+                    else
+                    {
+                        errorLog.Add($"[Connect] Bỏ qua tại {key} — c.IsConnected={c.IsConnected}, other.IsConnected={other.IsConnected}");
+                    }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    errorLog.Add($"[Connect] Lỗi tại {key} — {ex.GetType().Name}: {ex.Message}");
+                }
                 map.Remove(key);
             }
             else
