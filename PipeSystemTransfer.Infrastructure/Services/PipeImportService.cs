@@ -17,7 +17,9 @@ namespace PipeSystemTransfer.Infrastructure.Services
             _doc = doc;
         }
 
-        public ImportResult ImportPipeSystem(PipeSystemDto pipeSystem, Action<ProgressReport> onProgress = null)
+        public ImportResult ImportPipeSystem(
+            PipeSystemDto pipeSystem,
+            Action<ProgressReport> onProgress = null)
         {
             var result = new ImportResult();
             int total = pipeSystem.Pipes.Count + pipeSystem.Fittings.Count;
@@ -35,24 +37,31 @@ namespace PipeSystemTransfer.Infrastructure.Services
                     tx.Start();
                     try
                     {
-                        var pipeTypeMap   = BuildPipeTypeMap();
-                        var levelMap      = BuildLevelMap();
+                        var pipeTypeMap = BuildPipeTypeMap();
+                        var levelMap = BuildLevelMap();
                         var systemTypeMap = BuildPipeSystemTypeMap();
-                        var symbolCache   = BuildSymbolCache();
+                        var symbolCache = BuildSymbolCache();
 
-                        var createdPipes    = new List<Pipe>();
+                        var createdPipes = new List<Pipe>();
+                        var pipeIdMap = new Dictionary<string, Pipe>();
                         var createdFittings = new List<FamilyInstance>();
+                        var fittingIdMap = new Dictionary<string, FamilyInstance>();
+
+                 
+                        var fittingCache = BuildFittingSymbolCache();
+                        result.CreatedFittings = CreateFittings(
+                            pipeSystem.Fittings, levelMap, symbolCache, fittingCache, result,
+                            onProgress, ref current, total, createdFittings, fittingIdMap);
 
                         result.CreatedPipes = CreatePipes(
                             pipeSystem.Pipes, pipeTypeMap, levelMap, systemTypeMap, result,
-                            onProgress, ref current, total, createdPipes);
+                            onProgress, ref current, total, createdPipes, pipeIdMap);
 
-                        result.CreatedFittings = CreateFittings(
-                            pipeSystem.Fittings, levelMap, symbolCache, result,
-                            onProgress, ref current, total, createdFittings);
-
-                        Report(onProgress, current, total, "Nối kết nối...");
-                        result.JoinedConnectors = ConnectAllElements(createdPipes, createdFittings, result.ErrorLog);
+                        _doc.Regenerate();
+                        result.JoinedConnectors = ConnectAllElements(
+                            pipeSystem.Pipes,    pipeIdMap,
+                            pipeSystem.Fittings, fittingIdMap,
+                            result.ErrorLog);
 
                         tx.Commit();
                         result.Success = true;
@@ -82,7 +91,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
             using (var tx = new Transaction(_doc, "Activate Family Symbols"))
             {
                 tx.Start();
-                foreach (var dto in pipeSystem.Fittings.Cast<PipeElementDto>())
+                foreach (var dto in pipeSystem.Fittings)
                 {
                     var key = (dto.FamilyName, dto.TypeName);
                     if (symbolCache.TryGetValue(key, out var symbol) && !symbol.IsActive)
@@ -104,40 +113,41 @@ namespace PipeSystemTransfer.Infrastructure.Services
             Dictionary<string, PipingSystemType> systemTypeMap,
             ImportResult result,
             Action<ProgressReport> onProgress, ref int current, int total,
-            List<Pipe> createdPipes)
+            List<Pipe> createdPipes,
+            Dictionary<string, Pipe> idMap)
         {
             int count = 0;
             var defaultPipeType = pipeTypeMap.Values.FirstOrDefault();
-            var defaultLevel    = levelMap.Values.FirstOrDefault();
-            var defaultSystem   = systemTypeMap.Values.FirstOrDefault();
+            var defaultLevel = levelMap.Values.FirstOrDefault();
+            var defaultSystem = systemTypeMap.Values.FirstOrDefault();
 
             foreach (var dto in pipes)
             {
                 try
                 {
-                    var pipeType   = pipeTypeMap.TryGetValue(dto.PipeTypeName, out var pt) ? pt : defaultPipeType;
-                    var level      = levelMap.TryGetValue(dto.LevelName, out var lv) ? lv : defaultLevel;
-                    var systemType = systemTypeMap.TryGetValue(dto.SystemType, out var st) ? st : defaultSystem;
+                    var pipeType = pipeTypeMap.TryGetValue(dto.PipeTypeName, out var pt) ? pt : defaultPipeType;
+                    var level = levelMap.TryGetValue(dto.LevelName, out var lv) ? lv : defaultLevel;
+                    var systemType = systemTypeMap.TryGetValue(dto.SystemTypeName, out var st) ? st : defaultSystem;
 
                     if (pipeType == null)
                     {
                         result.FailedElements++;
-                        result.ErrorLog.Add($"[Pipe {dto.RevitId}] PipeType '{dto.PipeTypeName}' không có trong file đích");
+                        result.ErrorLog.Add($"[Pipe {dto.Id}] PipeType '{dto.PipeTypeName}' không có trong file đích");
                     }
                     else if (level == null)
                     {
                         result.FailedElements++;
-                        result.ErrorLog.Add($"[Pipe {dto.RevitId}] Level '{dto.LevelName}' không có trong file đích");
+                        result.ErrorLog.Add($"[Pipe {dto.Id}] Level '{dto.LevelName}' không có trong file đích");
                     }
                     else
                     {
-                        var start = new XYZ(dto.StartX, dto.StartY, dto.StartZ);
-                        var end   = new XYZ(dto.EndX, dto.EndY, dto.EndZ);
+                        var start = ParseXYZ(dto.StartPoint);
+                        var end = ParseXYZ(dto.EndPoint);
 
                         if (start.DistanceTo(end) < 0.001)
                         {
                             result.FailedElements++;
-                            result.ErrorLog.Add($"[Pipe {dto.RevitId}] Chiều dài < 0.001 ft, bỏ qua");
+                            result.ErrorLog.Add($"[Pipe {dto.Id}] Chiều dài < 0.001 ft, bỏ qua");
                         }
                         else
                         {
@@ -149,12 +159,13 @@ namespace PipeSystemTransfer.Infrastructure.Services
                             {
                                 pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)?.Set(dto.Diameter);
                                 createdPipes.Add(pipe);
+                                idMap[dto.Id] = pipe;
                                 count++;
                             }
                             else
                             {
                                 result.FailedElements++;
-                                result.ErrorLog.Add($"[Pipe {dto.RevitId}] Pipe.Create() trả về null");
+                                result.ErrorLog.Add($"[Pipe {dto.Id}] Pipe.Create() trả về null");
                             }
                         }
                     }
@@ -162,7 +173,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 catch (Exception ex)
                 {
                     result.FailedElements++;
-                    result.ErrorLog.Add($"[Pipe {dto.RevitId}] {ex.GetType().Name}: {ex.Message}");
+                    result.ErrorLog.Add($"[Pipe {dto.Id}] {ex.GetType().Name}: {ex.Message}");
                 }
                 Report(onProgress, ++current, total, $"Tạo ống {count}/{pipes.Count}");
             }
@@ -172,9 +183,11 @@ namespace PipeSystemTransfer.Infrastructure.Services
         private int CreateFittings(List<PipeFittingDto> fittings,
             Dictionary<string, Level> levelMap,
             Dictionary<(string, string), FamilySymbol> symbolCache,
+            Dictionary<(string, string), FamilySymbol> fittingCache,
             ImportResult result,
             Action<ProgressReport> onProgress, ref int current, int total,
-            List<FamilyInstance> createdFittings)
+            List<FamilyInstance> createdFittings,
+            Dictionary<string, FamilyInstance> idMap)
         {
             int count = 0;
             var defaultLevel = levelMap.Values.FirstOrDefault();
@@ -183,11 +196,20 @@ namespace PipeSystemTransfer.Infrastructure.Services
             {
                 try
                 {
-                    if (!symbolCache.TryGetValue((dto.FamilyName, dto.TypeName), out var symbol))
+                    var key = (dto.FamilyName, dto.TypeName);
+                    if (!symbolCache.TryGetValue(key, out var symbol))
+                    {
+                        symbol = FindBestMatch(fittingCache, dto.FamilyName, dto.TypeName);
+                    }
+
+                    if (symbol != null && !symbol.IsActive)
+                        symbol.Activate();
+
+                    if (symbol == null)
                     {
                         result.FailedElements++;
                         result.MissingFamilies.Add($"{dto.FamilyName} : {dto.TypeName}");
-                        result.ErrorLog.Add($"[Fitting {dto.RevitId}] Family không có trong file đích: '{dto.FamilyName}' / '{dto.TypeName}'");
+                        result.ErrorLog.Add($"[Fitting {dto.Id}] Family không có trong file đích: '{dto.FamilyName}' / '{dto.TypeName}'");
                     }
                     else
                     {
@@ -195,25 +217,26 @@ namespace PipeSystemTransfer.Infrastructure.Services
                         if (level == null)
                         {
                             result.FailedElements++;
-                            result.ErrorLog.Add($"[Fitting {dto.RevitId}] Level '{dto.LevelName}' không có trong file đích");
+                            result.ErrorLog.Add($"[Fitting {dto.Id}] Level '{dto.LevelName}' không có trong file đích");
                         }
                         else
                         {
-                            var location = new XYZ(dto.LocationX, dto.LocationY, dto.LocationZ);
+                            var location = ParseXYZ(dto.LocationPoint);
                             var instance = _doc.Create.NewFamilyInstance(
                                 location, symbol, level,
                                 Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
 
                             if (instance != null)
                             {
-                                ApplyRotation(instance, dto.RotationAngle);
                                 createdFittings.Add(instance);
+                                idMap[dto.Id] = instance;
                                 count++;
+                                ApplyTransformAndFlips(instance, dto);
                             }
                             else
                             {
                                 result.FailedElements++;
-                                result.ErrorLog.Add($"[Fitting {dto.RevitId}] NewFamilyInstance() trả về null: '{dto.FamilyName}' / '{dto.TypeName}'");
+                                result.ErrorLog.Add($"[Fitting {dto.Id}] NewFamilyInstance() trả về null: '{dto.FamilyName}' / '{dto.TypeName}'");
                             }
                         }
                     }
@@ -221,7 +244,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 catch (Exception ex)
                 {
                     result.FailedElements++;
-                    result.ErrorLog.Add($"[Fitting {dto.RevitId}] {dto.FamilyName}/{dto.TypeName} — {ex.GetType().Name}: {ex.Message}");
+                    result.ErrorLog.Add($"[Fitting {dto.Id}] {dto.FamilyName}/{dto.TypeName} — {ex.GetType().Name}: {ex.Message}");
                 }
                 Report(onProgress, ++current, total, $"Tạo fitting {count}/{fittings.Count}");
             }
@@ -231,68 +254,136 @@ namespace PipeSystemTransfer.Infrastructure.Services
         private static void Report(Action<ProgressReport> onProgress, int current, int total, string message)
             => onProgress?.Invoke(new ProgressReport { Current = current, Total = total, Message = message });
 
-        private int ConnectAllElements(List<Pipe> pipes, List<FamilyInstance> fittings, List<string> errorLog)
+        private int ConnectAllElements(
+            List<PipeDto> pipeDtos, Dictionary<string, Pipe> pipeMap,
+            List<PipeFittingDto> fittingDtos, Dictionary<string, FamilyInstance> fittingMap,
+            List<string> errorLog)
         {
-            var freeConns = new Dictionary<string, Connector>();
+            var idToElement = new Dictionary<string, Element>();
+            foreach (var kv in pipeMap) idToElement[kv.Key] = kv.Value;
+            foreach (var kv in fittingMap) idToElement[kv.Key] = kv.Value;
+
+            var processed = new HashSet<string>();
             int joined = 0;
 
-            foreach (var pipe in pipes)
-                foreach (Connector c in pipe.ConnectorManager.Connectors)
-                    if (c.Domain == Domain.DomainPiping)
-                        TryJoin(freeConns, c, ref joined, errorLog);
-
-            foreach (var fitting in fittings)
+            foreach (var dto in pipeDtos)
             {
-                var cm = fitting.MEPModel?.ConnectorManager;
+                if (!pipeMap.TryGetValue(dto.Id, out var pipe)) continue;
+                foreach (var connDto in dto.Connectors)
+                    TryConnectByIds(dto.Id, pipe.ConnectorManager, connDto,
+                                    idToElement, processed, ref joined, errorLog);
+            }
+
+            foreach (var dto in fittingDtos)
+            {
+                if (!fittingMap.TryGetValue(dto.Id, out var inst)) continue;
+                var cm = inst.MEPModel?.ConnectorManager;
                 if (cm == null) continue;
-                foreach (Connector c in cm.Connectors)
-                    if (c.Domain == Domain.DomainPiping)
-                        TryJoin(freeConns, c, ref joined, errorLog);
+                foreach (var connDto in dto.Connectors)
+                    TryConnectByIds(dto.Id, cm, connDto,
+                                    idToElement, processed, ref joined, errorLog);
             }
 
             return joined;
         }
 
-        private static void TryJoin(Dictionary<string, Connector> map, Connector c, ref int joined, List<string> errorLog)
+        private static void TryConnectByIds(
+            string ownerId, ConnectorManager cmA, ConnectorDto connDto,
+            Dictionary<string, Element> idToElement,
+            HashSet<string> processed, ref int joined, List<string> errorLog)
         {
-            var key = ConnKey(c.Origin);
-            if (map.TryGetValue(key, out var other))
+            if (string.IsNullOrEmpty(connDto.ConnectedToId)) return;
+
+            var pairKey = string.Compare(ownerId, connDto.ConnectedToId, StringComparison.Ordinal) < 0
+                ? $"{ownerId}:{connDto.ConnectedToId}"
+                : $"{connDto.ConnectedToId}:{ownerId}";
+            if (!processed.Add(pairKey)) return;
+
+            if (!idToElement.TryGetValue(connDto.ConnectedToId, out var otherElement)) return;
+            var cmB = GetConnectorManager(otherElement);
+            if (cmB == null) return;
+
+            var connA = FindConnectorById(cmA, connDto.ConnectorId)
+                     ?? FindFreeConnector(cmA);
+            if (connA == null) return;
+
+            if (connA.IsConnected)
             {
-                try
-                {
-                    if (!c.IsConnected && !other.IsConnected)
-                    {
-                        c.ConnectTo(other);
-                        joined++;
-                    }
-                    else
-                    {
-                        errorLog.Add($"[Connect] Bỏ qua tại {key} — c.IsConnected={c.IsConnected}, other.IsConnected={other.IsConnected}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errorLog.Add($"[Connect] Lỗi tại {key} — {ex.GetType().Name}: {ex.Message}");
-                }
-                map.Remove(key);
+                foreach (Connector r in connA.AllRefs)
+                    if (r.Owner.Id == otherElement.Id) return;
+                return; 
             }
-            else
+
+            var connB = FindClosestFreeConnector(cmB, connA.Origin);
+            if (connB == null || connB.IsConnected) return;
+
+            try
             {
-                map[key] = c;
+                connA.ConnectTo(connB);
+                joined++;
+            }
+            catch (Exception ex)
+            {
+                errorLog.Add($"[Connect] {ownerId}↔{connDto.ConnectedToId} — {ex.GetType().Name}: {ex.Message}");
             }
         }
 
-        private static string ConnKey(XYZ pt)
-            => $"{Math.Round(pt.X, 3)},{Math.Round(pt.Y, 3)},{Math.Round(pt.Z, 3)}";
-
-        private void ApplyRotation(FamilyInstance instance, double angle)
+        private static ConnectorManager GetConnectorManager(Element el)
         {
-            if (Math.Abs(angle) < 0.001) return;
-            var lp = instance.Location as LocationPoint;
-            if (lp == null) return;
+            if (el is Pipe pipe) return pipe.ConnectorManager;
+            if (el is FamilyInstance fi) return fi.MEPModel?.ConnectorManager;
+            return null;
+        }
 
-            var axis = Line.CreateBound(lp.Point, lp.Point + XYZ.BasisZ);
-            lp.Rotate(axis, angle - lp.Rotation);
+        private static Connector FindConnectorById(ConnectorManager cm, int id)
+        {
+            foreach (Connector c in cm.Connectors)
+                if (c.Domain == Domain.DomainPiping && c.Id == id)
+                    return c;
+            return null;
+        }
+
+        private static Connector FindFreeConnector(ConnectorManager cm)
+        {
+            foreach (Connector c in cm.Connectors)
+                if (c.Domain == Domain.DomainPiping && !c.IsConnected)
+                    return c;
+            return null;
+        }
+
+        private static Connector FindClosestFreeConnector(ConnectorManager cm, XYZ origin)
+        {
+            Connector best = null;
+            double bestDist = double.MaxValue;
+            foreach (Connector c in cm.Connectors)
+            {
+                if (c.Domain != Domain.DomainPiping || c.IsConnected) continue;
+                double dist = c.Origin.DistanceTo(origin);
+                if (dist < bestDist) { bestDist = dist; best = c; }
+            }
+            return best;
+        }
+
+        private void ApplyTransformAndFlips(FamilyInstance instance, PipeFittingDto dto)
+        {
+            var angleRad = dto.Angle * (Math.PI / 180.0);
+            if (Math.Abs(angleRad) > 0.001)
+            {
+                try
+                {
+                    var center = ParseXYZ(dto.LocationPoint);
+                    var axis   = Line.CreateBound(center, center + XYZ.BasisZ);
+                    ElementTransformUtils.RotateElement(_doc, instance.Id, axis, angleRad);
+                }
+                catch { }
+            }
+
+            try
+            {
+                if (dto.HandFlipped != instance.HandFlipped) instance.flipHand();
+                if (dto.FacingFlipped != instance.FacingFlipped) instance.flipFacing();
+            }
+            catch { }
         }
 
         private static void ApplyFastFailureHandling(Transaction tx)
@@ -308,6 +399,23 @@ namespace PipeSystemTransfer.Infrastructure.Services
             var cache = new Dictionary<(string, string), FamilySymbol>();
             var symbols = new FilteredElementCollector(_doc)
                 .OfClass(typeof(FamilySymbol))
+                .Cast<FamilySymbol>();
+
+            foreach (var s in symbols)
+            {
+                var key = (s.FamilyName, s.Name);
+                if (!cache.ContainsKey(key))
+                    cache[key] = s;
+            }
+            return cache;
+        }
+
+        private Dictionary<(string, string), FamilySymbol> BuildFittingSymbolCache()
+        {
+            var cache = new Dictionary<(string, string), FamilySymbol>();
+            var symbols = new FilteredElementCollector(_doc)
+                .OfClass(typeof(FamilySymbol))
+                .OfCategory(BuiltInCategory.OST_PipeFitting)
                 .Cast<FamilySymbol>();
 
             foreach (var s in symbols)
@@ -342,18 +450,131 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 .Cast<PipingSystemType>()
                 .ToDictionary(s => s.Name, s => s, StringComparer.OrdinalIgnoreCase);
         }
-    }
 
-    internal class SilentFailurePreprocessor : IFailuresPreprocessor
-    {
-        public FailureProcessingResult PreprocessFailures(FailuresAccessor failuresAccessor)
+        private static readonly char[] _splitChars = { ' ', '-', '_', '/', '°', '(', ')' };
+
+        private static readonly HashSet<string> _typeKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            foreach (var failure in failuresAccessor.GetFailureMessages())
+            "tee", "elbow", "union", "transition", "cap", "wye", "flange", "trap",
+            "siphon", "coupling", "joint", "reducer", "bend", "cross", "plug",
+            "socket", "sweep", "swept", "lateral", "saddle", "valve", "adapter",
+            "inspection", "cleanout", "strainer", "nipple", "bushing"
+        };
+
+        private static XYZ ParseXYZ(Point3D pt)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            return new XYZ(
+                double.Parse(pt.X, inv),
+                double.Parse(pt.Y, inv),
+                double.Parse(pt.Z, inv));
+        }
+
+        private static readonly Dictionary<string, string> _abbrevMap =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "flg",  "flange"  }, { "elb", "elbow"    }, { "ell",  "elbow"    },
+            { "red",  "reducer" }, { "thr", "thread"   }, { "thrd", "thread"   },
+            { "cplg", "coupling"}, { "str", "strainer" }, { "adpt", "adapter"  },
+            { "trans","transition"},{ "unin","union"    }, { "flex", "flexible" }
+        };
+
+        private static FamilySymbol FindBestMatch(
+            Dictionary<(string, string), FamilySymbol> cache,
+            string familyName, string typeName)
+        {
+            if (cache.Count == 0) return null;
+
+            var rawWords = $"{familyName} {typeName}"
+                .ToLowerInvariant()
+                .Split(_splitChars, StringSplitOptions.RemoveEmptyEntries);
+            var queryWords = new HashSet<string>();
+            foreach (var w in rawWords)
             {
-                if (failure.GetSeverity() == FailureSeverity.Warning)
-                    failuresAccessor.DeleteWarning(failure);
+                queryWords.Add(w);
+                if (_abbrevMap.TryGetValue(w, out var expanded))
+                    queryWords.Add(expanded);
             }
-            return FailureProcessingResult.Continue;
+
+            FamilySymbol best = null;
+            int bestScore = 0;
+
+            foreach (var kvp in cache)
+            {
+                var candidate = $"{kvp.Key.Item1} {kvp.Key.Item2}".ToLowerInvariant();
+                int score = 0;
+                foreach (var word in queryWords)
+                {
+                    if (candidate.Contains(word))
+                        score += _typeKeywords.Contains(word) ? 10 : 1;
+                }
+
+                if (score > bestScore || best == null)
+                {
+                    bestScore = score;
+                    best = kvp.Value;
+                }
+            }
+
+            return best;
+        }
+
+
+        private static int CountConnectedPairs(List<Pipe> pipes, List<FamilyInstance> fittings)
+        {
+            var seen = new HashSet<string>();
+            int count = 0;
+
+            void CountFromManager(ConnectorManager cm, int ownerId)
+            {
+                if (cm == null) return;
+                foreach (Connector c in cm.Connectors)
+                {
+                    if (c.Domain != Domain.DomainPiping || !c.IsConnected) continue;
+                    foreach (Connector r in c.AllRefs)
+                    {
+                        if (r.Domain != Domain.DomainPiping) continue;
+                        int otherId = r.Owner.Id.IntegerValue;
+                        int a = Math.Min(ownerId, otherId);
+                        int b = Math.Max(ownerId, otherId);
+                        if (seen.Add($"{a}:{b}")) count++;
+                    }
+                }
+            }
+
+            foreach (var pipe in pipes)
+                CountFromManager(pipe.ConnectorManager, pipe.Id.IntegerValue);
+
+            foreach (var fi in fittings)
+                CountFromManager(fi.MEPModel?.ConnectorManager, fi.Id.IntegerValue);
+
+            return count;
+        }
+
+
+        internal class SilentFailurePreprocessor : IFailuresPreprocessor
+        {
+            public FailureProcessingResult PreprocessFailures(FailuresAccessor failuresAccessor)
+            {
+                foreach (var failure in failuresAccessor.GetFailureMessages())
+                {
+                    if (failure.GetSeverity() == FailureSeverity.Warning)
+                    {
+                        failuresAccessor.DeleteWarning(failure);
+                    }
+                    else if (failure.GetSeverity() == FailureSeverity.Error)
+                    {
+                        if (failure.HasResolutionOfType(FailureResolutionType.SkipElements))
+                        {
+                            failure.SetCurrentResolutionType(FailureResolutionType.SkipElements);
+                            failuresAccessor.ResolveFailure(failure);
+                        }
+                    }
+                }
+                return FailureProcessingResult.Continue;
+            }
         }
     }
 }
+
+

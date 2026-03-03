@@ -1,17 +1,14 @@
+using System.Collections.Generic;
+
 namespace PipeSystemTransfer.Core.Models
 {
     public class PipeDto : PipeElementDto
     {
-        public double StartX { get; set; }
-        public double StartY { get; set; }
-        public double StartZ { get; set; }
-        public double EndX { get; set; }
-        public double EndY { get; set; }
-        public double EndZ { get; set; }
-        public double Diameter { get; set; }
-        public double Length { get; set; }
-        public string PipeTypeName { get; set; }
-        public string InsulationTypeName { get; set; }
-        public double InsulationThickness { get; set; }
+        public string            SystemTypeName { get; set; }
+        public string            PipeTypeName   { get; set; }
+        public double            Diameter       { get; set; }
+        public Point3D           StartPoint     { get; set; } = new Point3D();
+        public Point3D           EndPoint       { get; set; } = new Point3D();
+        public List<ConnectorDto> Connectors    { get; set; } = new List<ConnectorDto>();
     }
 }

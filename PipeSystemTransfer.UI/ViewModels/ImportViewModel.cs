@@ -56,7 +56,7 @@ namespace PipeSystemTransfer.UI.ViewModels
 
         public string PreviewText => _loaded == null
             ? "Chưa tải file"
-            : $"File: {_loaded.ExportedFrom}\nNgày: {_loaded.ExportedAt:dd/MM/yyyy HH:mm}\nRevit: {_loaded.RevitVersion}\nPipes: {_loaded.Pipes.Count} | Fittings: {_loaded.Fittings.Count}";
+            : $"File: {System.IO.Path.GetFileName(_filePath)}\nNgày: {_loaded.ExportedAt:dd/MM/yyyy HH:mm}\nRevit: {_loaded.ExportedFrom}\nPipes: {_loaded.Pipes.Count} | Fittings: {_loaded.Fittings.Count}";
 
         public ICommand BrowseCommand { get; }
         public ICommand ImportCommand { get; }
@@ -134,27 +134,53 @@ namespace PipeSystemTransfer.UI.ViewModels
                         if (more > 0)
                             msg += $"\n• ... và {more} family khác";
                     }
-                    if (result.ErrorLog.Count > 0)
+                    try
                     {
-                        try
+                        var logFolder = @"D:\BAO";
+                        if (!Directory.Exists(logFolder))
+                            Directory.CreateDirectory(logFolder);
+
+                        var logPath = Path.Combine(
+                            logFolder,
+                            $"PipeImport_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+
+                        var logLines = new System.Collections.Generic.List<string>
                         {
-                            var logFolder = @"D:\BAO";
+                            $"=== PipeSystemTransfer Import Log ===",
+                            $"Thời gian : {DateTime.Now:dd/MM/yyyy HH:mm:ss}",
+                            $"File JSON : {_filePath}",
+                            $"Nguồn     : {_loaded.ExportedFrom}",
+                            $"",
+                            $"[Kết quả]",
+                            $"  Pipes tạo thành công : {result.CreatedPipes}",
+                            $"  Fittings tạo thành công : {result.CreatedFittings}",
+                            $"  Kết nối (auto): {result.JoinedConnectors}",
+                            $"  Phần tử lỗi  : {result.FailedElements}",
+                        };
 
-                            if (!Directory.Exists(logFolder))
-                                Directory.CreateDirectory(logFolder);
-
-                            var logPath = Path.Combine(
-                                logFolder,
-                                $"PipeImport_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-
-                            File.WriteAllLines(logPath, result.ErrorLog);
-
-                            msg += $"\n\nLog lỗi ({result.ErrorLog.Count} dòng): {logPath}";
-                        }
-                        catch (Exception ex)
+                        if (result.MissingFamilies.Count > 0)
                         {
-                            msg += $"\nKhông ghi được log: {ex.Message}";
+                            logLines.Add("");
+                            logLines.Add($"[Family bị thiếu — {result.MissingFamilies.Count}]");
+                            foreach (var f in result.MissingFamilies)
+                                logLines.Add($"  • {f}");
                         }
+
+                        if (result.ErrorLog.Count > 0)
+                        {
+                            logLines.Add("");
+                            logLines.Add($"[Chi tiết lỗi — {result.ErrorLog.Count} dòng]");
+                            logLines.AddRange(result.ErrorLog);
+                        }
+
+                        File.WriteAllLines(logPath, logLines,
+                            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+                        msg += $"\n\nLog import: {logPath}";
+                    }
+                    catch (Exception ex)
+                    {
+                        msg += $"\nKhông ghi được log: {ex.Message}";
                     }
                     StatusMessage = msg;
                 }
