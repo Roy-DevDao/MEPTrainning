@@ -25,30 +25,30 @@ namespace PipeSystemTransfer.Infrastructure.Services
             int total = pipeSystem.Pipes.Count + pipeSystem.Fittings.Count;
             int current = 0;
 
+            var createdPipes    = new List<Pipe>();
+            var pipeIdMap       = new Dictionary<string, Pipe>();
+            var createdFittings = new List<FamilyInstance>();
+            var fittingIdMap    = new Dictionary<string, FamilyInstance>();
+
             try
             {
                 Report(onProgress, 0, total, "Kích hoạt family...");
                 ActivateRequiredSymbols(pipeSystem, result);
                 Report(onProgress, 0, total, "Bắt đầu tạo phần tử...");
 
+                // === Transaction 1: Tạo elements ===
                 using (var tx = new Transaction(_doc, "Import Pipe System"))
                 {
                     ApplyFastFailureHandling(tx);
                     tx.Start();
                     try
                     {
-                        var pipeTypeMap = BuildPipeTypeMap();
-                        var levelMap = BuildLevelMap();
+                        var pipeTypeMap  = BuildPipeTypeMap();
+                        var levelMap     = BuildLevelMap();
                         var systemTypeMap = BuildPipeSystemTypeMap();
-                        var symbolCache = BuildSymbolCache();
-
-                        var createdPipes = new List<Pipe>();
-                        var pipeIdMap = new Dictionary<string, Pipe>();
-                        var createdFittings = new List<FamilyInstance>();
-                        var fittingIdMap = new Dictionary<string, FamilyInstance>();
-
-                 
+                        var symbolCache  = BuildSymbolCache();
                         var fittingCache = BuildFittingSymbolCache();
+
                         result.CreatedFittings = CreateFittings(
                             pipeSystem.Fittings, levelMap, symbolCache, fittingCache, result,
                             onProgress, ref current, total, createdFittings, fittingIdMap);
@@ -57,23 +57,42 @@ namespace PipeSystemTransfer.Infrastructure.Services
                             pipeSystem.Pipes, pipeTypeMap, levelMap, systemTypeMap, result,
                             onProgress, ref current, total, createdPipes, pipeIdMap);
 
-                        _doc.Regenerate();
-                        result.JoinedConnectors = ConnectAllElements(
-                            pipeSystem.Pipes,    pipeIdMap,
-                            pipeSystem.Fittings, fittingIdMap,
-                            result.ErrorLog);
-
                         tx.Commit();
-                        result.Success = true;
-                        Report(onProgress, total, total, "Hoàn tất import!");
                     }
                     catch (Exception ex)
                     {
                         tx.RollBack();
                         result.Success = false;
                         result.ErrorMessage = ex.Message;
+                        return result;
                     }
                 }
+
+                // === Transaction 2: Kết nối tường minh ===
+                // Chạy trong tx riêng SAU khi tạo elements xong → tránh "family in network"
+                Report(onProgress, total, total, "Đang kết nối phần tử...");
+                using (var connectTx = new Transaction(_doc, "Connect MEP Elements"))
+                {
+                    ApplyFastFailureHandling(connectTx);
+                    connectTx.Start();
+                    try
+                    {
+                        ConnectAllElements(
+                            pipeSystem.Pipes, pipeIdMap,
+                            pipeSystem.Fittings, fittingIdMap,
+                            result.ErrorLog);
+                        connectTx.Commit();
+                    }
+                    catch (Exception ex)
+                    {
+                        connectTx.RollBack();
+                        result.ErrorLog.Add($"[Connect Tx] {ex.Message}");
+                    }
+                }
+
+                result.Success = true;
+                result.JoinedConnectors = CountConnectedPairs(createdPipes, createdFittings);
+                Report(onProgress, total, total, "Hoàn tất import!");
             }
             catch (Exception ex)
             {
