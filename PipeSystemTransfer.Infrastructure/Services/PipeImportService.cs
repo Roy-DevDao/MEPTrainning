@@ -36,7 +36,6 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 ActivateRequiredSymbols(pipeSystem, result);
                 Report(onProgress, 0, total, "Bắt đầu tạo phần tử...");
 
-                // === Transaction 1: Tạo elements ===
                 using (var tx = new Transaction(_doc, "Import Pipe System"))
                 {
                     ApplyFastFailureHandling(tx);
@@ -68,8 +67,6 @@ namespace PipeSystemTransfer.Infrastructure.Services
                     }
                 }
 
-                // === Transaction 2: Kết nối tường minh ===
-                // Chạy trong tx riêng SAU khi tạo elements xong → tránh "family in network"
                 Report(onProgress, total, total, "Đang kết nối phần tử...");
                 using (var connectTx = new Transaction(_doc, "Connect MEP Elements"))
                 {
@@ -518,11 +515,94 @@ namespace PipeSystemTransfer.Infrastructure.Services
             { "trans","transition"},{ "unin","union"    }, { "flex", "flexible" }
         };
 
+        private enum GenericShape
+        {
+            Unknown,
+            Elbow,
+            Tee,
+            Cross,
+            Transition,
+            Cap,
+            Coupling
+        }
+
+        private static GenericShape DetectGenericShape(string familyName, string typeName)
+        {
+            var name = $"{familyName} {typeName}".ToLowerInvariant();
+
+            if (name.Contains("tee")) return GenericShape.Tee;
+            if (name.Contains("elbow") || name.Contains("bend")) return GenericShape.Elbow;
+            if (name.Contains("cross")) return GenericShape.Cross;
+            if (name.Contains("transition") || name.Contains("trans")) return GenericShape.Transition;
+            if (name.Contains("cap")) return GenericShape.Cap;
+            if (name.Contains("coupling") || name.Contains("cplg")) return GenericShape.Coupling;
+
+            return GenericShape.Unknown;
+        }
+
+        private static FamilySymbol TryMapToProvidedGenericFamily(
+            Dictionary<(string, string), FamilySymbol> cache,
+            GenericShape shape)
+        {
+            if (shape == GenericShape.Unknown || cache.Count == 0)
+                return null;
+
+            string targetKeyword = null;
+
+            switch (shape)
+            {
+                case GenericShape.Elbow:
+                    targetKeyword = "elbow_generic";
+                    break;
+                case GenericShape.Tee:
+                    targetKeyword = "tee_generic";
+                    break;
+                case GenericShape.Cross:
+                    targetKeyword = "cross_generic";
+                    break;
+                case GenericShape.Transition:
+                    targetKeyword = "transition_generic";
+                    break;
+                case GenericShape.Cap:
+                    targetKeyword = "cap_generic";
+                    break;
+                case GenericShape.Coupling:
+                    targetKeyword = "coupling_generic";
+                    break;
+                default:
+                    targetKeyword = null;
+                    break;
+            }
+
+            if (targetKeyword == null) return null;
+
+            FamilySymbol best = null;
+
+            foreach (var kvp in cache)
+            {
+                var famName = kvp.Key.Item1;
+                if (famName.IndexOf(targetKeyword, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    if (kvp.Key.Item2.Equals("Standard", StringComparison.OrdinalIgnoreCase))
+                        return kvp.Value;
+
+                    best = kvp.Value;
+                }
+            }
+
+            return best;
+        }
+
         private static FamilySymbol FindBestMatch(
             Dictionary<(string, string), FamilySymbol> cache,
             string familyName, string typeName)
         {
             if (cache.Count == 0) return null;
+
+            var shape = DetectGenericShape(familyName, typeName);
+            var mapped = TryMapToProvidedGenericFamily(cache, shape);
+            if (mapped != null)
+                return mapped;
 
             var rawWords = $"{familyName} {typeName}"
                 .ToLowerInvariant()
@@ -613,7 +693,6 @@ namespace PipeSystemTransfer.Infrastructure.Services
 
                     if (severity == FailureSeverity.Error)
                     {
-                        // 1. Nếu có thể tách element khỏi network / group, ưu tiên dùng DetachElements
                         if (failure.HasResolutionOfType(FailureResolutionType.DetachElements))
                         {
                             failure.SetCurrentResolutionType(FailureResolutionType.DetachElements);
@@ -621,7 +700,6 @@ namespace PipeSystemTransfer.Infrastructure.Services
                             continue;
                         }
 
-                        // 2. Nếu không, thử bỏ qua phần tử gây lỗi
                         if (failure.HasResolutionOfType(FailureResolutionType.SkipElements))
                         {
                             failure.SetCurrentResolutionType(FailureResolutionType.SkipElements);
@@ -629,7 +707,6 @@ namespace PipeSystemTransfer.Infrastructure.Services
                             continue;
                         }
 
-                        // 3. Cuối cùng, nếu có DeleteElements thì chấp nhận xóa để transaction không bị chặn
                         if (failure.HasResolutionOfType(FailureResolutionType.DeleteElements))
                         {
                             failure.SetCurrentResolutionType(FailureResolutionType.DeleteElements);
