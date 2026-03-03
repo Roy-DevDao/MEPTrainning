@@ -279,25 +279,45 @@ namespace PipeSystemTransfer.Infrastructure.Services
             List<string> errorLog)
         {
             var idToElement = new Dictionary<string, Element>();
-            foreach (var kv in pipeMap) idToElement[kv.Key] = kv.Value;
-            foreach (var kv in fittingMap) idToElement[kv.Key] = kv.Value;
+            foreach (var kv in pipeMap)
+            {
+                var el = kv.Value;
+                if (el != null && el.IsValidObject)
+                    idToElement[kv.Key] = el;
+            }
+            foreach (var kv in fittingMap)
+            {
+                var el = kv.Value;
+                if (el != null && el.IsValidObject)
+                    idToElement[kv.Key] = el;
+            }
 
             var processed = new HashSet<string>();
             int joined = 0;
 
             foreach (var dto in pipeDtos)
             {
-                if (!pipeMap.TryGetValue(dto.Id, out var pipe)) continue;
+                if (!pipeMap.TryGetValue(dto.Id, out var pipe) ||
+                    pipe == null || !pipe.IsValidObject)
+                    continue;
+
+                var cm = pipe.ConnectorManager;
+                if (cm == null) continue;
+
                 foreach (var connDto in dto.Connectors)
-                    TryConnectByIds(dto.Id, pipe.ConnectorManager, connDto,
+                    TryConnectByIds(dto.Id, cm, connDto,
                                     idToElement, processed, ref joined, errorLog);
             }
 
             foreach (var dto in fittingDtos)
             {
-                if (!fittingMap.TryGetValue(dto.Id, out var inst)) continue;
+                if (!fittingMap.TryGetValue(dto.Id, out var inst) ||
+                    inst == null || !inst.IsValidObject)
+                    continue;
+
                 var cm = inst.MEPModel?.ConnectorManager;
                 if (cm == null) continue;
+
                 foreach (var connDto in dto.Connectors)
                     TryConnectByIds(dto.Id, cm, connDto,
                                     idToElement, processed, ref joined, errorLog);
@@ -562,10 +582,16 @@ namespace PipeSystemTransfer.Infrastructure.Services
             }
 
             foreach (var pipe in pipes)
+            {
+                if (pipe == null || !pipe.IsValidObject) continue;
                 CountFromManager(pipe.ConnectorManager, pipe.Id.IntegerValue);
+            }
 
             foreach (var fi in fittings)
+            {
+                if (fi == null || !fi.IsValidObject) continue;
                 CountFromManager(fi.MEPModel?.ConnectorManager, fi.Id.IntegerValue);
+            }
 
             return count;
         }
@@ -577,19 +603,41 @@ namespace PipeSystemTransfer.Infrastructure.Services
             {
                 foreach (var failure in failuresAccessor.GetFailureMessages())
                 {
-                    if (failure.GetSeverity() == FailureSeverity.Warning)
+                    var severity = failure.GetSeverity();
+
+                    if (severity == FailureSeverity.Warning)
                     {
                         failuresAccessor.DeleteWarning(failure);
+                        continue;
                     }
-                    else if (failure.GetSeverity() == FailureSeverity.Error)
+
+                    if (severity == FailureSeverity.Error)
                     {
+                        // 1. Nếu có thể tách element khỏi network / group, ưu tiên dùng DetachElements
+                        if (failure.HasResolutionOfType(FailureResolutionType.DetachElements))
+                        {
+                            failure.SetCurrentResolutionType(FailureResolutionType.DetachElements);
+                            failuresAccessor.ResolveFailure(failure);
+                            continue;
+                        }
+
+                        // 2. Nếu không, thử bỏ qua phần tử gây lỗi
                         if (failure.HasResolutionOfType(FailureResolutionType.SkipElements))
                         {
                             failure.SetCurrentResolutionType(FailureResolutionType.SkipElements);
                             failuresAccessor.ResolveFailure(failure);
+                            continue;
+                        }
+
+                        // 3. Cuối cùng, nếu có DeleteElements thì chấp nhận xóa để transaction không bị chặn
+                        if (failure.HasResolutionOfType(FailureResolutionType.DeleteElements))
+                        {
+                            failure.SetCurrentResolutionType(FailureResolutionType.DeleteElements);
+                            failuresAccessor.ResolveFailure(failure);
                         }
                     }
                 }
+
                 return FailureProcessingResult.Continue;
             }
         }
