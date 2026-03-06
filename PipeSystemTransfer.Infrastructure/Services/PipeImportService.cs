@@ -53,8 +53,8 @@ namespace PipeSystemTransfer.Infrastructure.Services
                             onProgress, ref current, total, createdFittings, fittingIdMap);
 
                         result.CreatedPipes = CreatePipes(
-                            pipeSystem.Pipes, pipeTypeMap, levelMap, systemTypeMap, result,
-                            onProgress, ref current, total, createdPipes, pipeIdMap);
+                            pipeSystem.Pipes, pipeTypeMap, levelMap, systemTypeMap,
+                            result, onProgress, ref current, total, createdPipes, pipeIdMap);
 
                         tx.Commit();
                     }
@@ -134,56 +134,55 @@ namespace PipeSystemTransfer.Infrastructure.Services
         {
             int count = 0;
             var defaultPipeType = pipeTypeMap.Values.FirstOrDefault();
-            var defaultLevel = levelMap.Values.FirstOrDefault();
-            var defaultSystem = systemTypeMap.Values.FirstOrDefault();
+            var defaultLevel    = levelMap.Values.FirstOrDefault();
+            var defaultSystem   = systemTypeMap.Values.FirstOrDefault();
 
             foreach (var dto in pipes)
             {
                 try
                 {
-                    var pipeType = pipeTypeMap.TryGetValue(dto.PipeTypeName, out var pt) ? pt : defaultPipeType;
-                    var level = levelMap.TryGetValue(dto.LevelName, out var lv) ? lv : defaultLevel;
+                    var pipeType   = pipeTypeMap.TryGetValue(dto.PipeTypeName, out var pt) ? pt : defaultPipeType;
+                    var level      = levelMap.TryGetValue(dto.LevelName, out var lv) ? lv : defaultLevel;
                     var systemType = systemTypeMap.TryGetValue(dto.SystemTypeName, out var st) ? st : defaultSystem;
 
                     if (pipeType == null)
                     {
                         result.FailedElements++;
                         result.ErrorLog.Add($"[Pipe {dto.Id}] PipeType '{dto.PipeTypeName}' không có trong file đích");
+                        continue;
                     }
-                    else if (level == null)
+                    if (level == null)
                     {
                         result.FailedElements++;
                         result.ErrorLog.Add($"[Pipe {dto.Id}] Level '{dto.LevelName}' không có trong file đích");
+                        continue;
+                    }
+
+                    var start = ParseXYZ(dto.StartPoint);
+                    var end   = ParseXYZ(dto.EndPoint);
+
+                    if (start.DistanceTo(end) < 0.001)
+                    {
+                        result.FailedElements++;
+                        result.ErrorLog.Add($"[Pipe {dto.Id}] Chiều dài < 0.001 ft, bỏ qua");
+                        continue;
+                    }
+
+                    var pipe = Pipe.Create(_doc,
+                        systemType?.Id ?? ElementId.InvalidElementId,
+                        pipeType.Id, level.Id, start, end);
+
+                    if (pipe != null)
+                    {
+                        pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)?.Set(dto.Diameter);
+                        createdPipes.Add(pipe);
+                        idMap[dto.Id] = pipe;
+                        count++;
                     }
                     else
                     {
-                        var start = ParseXYZ(dto.StartPoint);
-                        var end = ParseXYZ(dto.EndPoint);
-
-                        if (start.DistanceTo(end) < 0.001)
-                        {
-                            result.FailedElements++;
-                            result.ErrorLog.Add($"[Pipe {dto.Id}] Chiều dài < 0.001 ft, bỏ qua");
-                        }
-                        else
-                        {
-                            var pipe = Pipe.Create(_doc,
-                                systemType?.Id ?? ElementId.InvalidElementId,
-                                pipeType.Id, level.Id, start, end);
-
-                            if (pipe != null)
-                            {
-                                pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)?.Set(dto.Diameter);
-                                createdPipes.Add(pipe);
-                                idMap[dto.Id] = pipe;
-                                count++;
-                            }
-                            else
-                            {
-                                result.FailedElements++;
-                                result.ErrorLog.Add($"[Pipe {dto.Id}] Pipe.Create() trả về null");
-                            }
-                        }
+                        result.FailedElements++;
+                        result.ErrorLog.Add($"[Pipe {dto.Id}] Pipe.Create() trả về null");
                     }
                 }
                 catch (Exception ex)
