@@ -401,22 +401,32 @@ namespace PipeSystemTransfer.Infrastructure.Services
 
         private void ApplyTransformAndFlips(FamilyInstance instance, PipeFittingDto dto)
         {
-            var angleRad = dto.Angle * (Math.PI / 180.0);
-            if (Math.Abs(angleRad) > 0.001)
-            {
-                try
-                {
-                    var center = ParseXYZ(dto.LocationPoint);
-                    var axis   = Line.CreateBound(center, center + XYZ.BasisZ);
-                    ElementTransformUtils.RotateElement(_doc, instance.Id, axis, angleRad);
-                }
-                catch { }
-            }
+            if (dto.Transform == null) return;
 
             try
             {
-                if (dto.HandFlipped != instance.HandFlipped) instance.flipHand();
-                if (dto.FacingFlipped != instance.FacingFlipped) instance.flipFacing();
+                var center   = ParseXYZ(dto.LocationPoint);
+                var T_target = ParseTransformDto(dto.Transform);
+
+              
+                double det = T_target.BasisX.DotProduct(T_target.BasisY.CrossProduct(T_target.BasisZ));
+                bool needFacingFlip = false;
+                if (det < 0)
+                {
+                    T_target.BasisX = -T_target.BasisX;
+                    needFacingFlip = true;
+                }
+
+                if (TryExtractRotation(T_target, out var axis, out var angle) && Math.Abs(angle) > 1e-6)
+                {
+                    var rotAxis = Line.CreateBound(center, center + axis);
+                    ElementTransformUtils.RotateElement(_doc, instance.Id, rotAxis, angle);
+                }
+
+                if (needFacingFlip)
+                {
+                    try { instance.flipFacing(); } catch { }
+                }
             }
             catch { }
         }
@@ -503,6 +513,72 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 double.Parse(pt.X, inv),
                 double.Parse(pt.Y, inv),
                 double.Parse(pt.Z, inv));
+        }
+
+        private static Transform ParseTransformDto(TransformDto t)
+        {
+            var tr = Transform.Identity;
+            tr.BasisX = ParseXYZ(t.BasisX);
+            tr.BasisY = ParseXYZ(t.BasisY);
+            tr.BasisZ = ParseXYZ(t.BasisZ);
+            tr.Origin  = ParseXYZ(t.Origin);
+            return tr;
+        }
+        private static bool TryExtractRotation(Transform deltaT, out XYZ axis, out double angle)
+        {
+            double trace    = deltaT.BasisX.X + deltaT.BasisY.Y + deltaT.BasisZ.Z;
+            double cosAngle = Math.Max(-1.0, Math.Min(1.0, (trace - 1.0) / 2.0));
+            angle = Math.Acos(cosAngle);
+
+            if (angle < 1e-6)
+            {
+                axis = XYZ.BasisZ;
+                return false;
+            }
+
+            double sinA = Math.Sin(angle);
+
+            if (Math.Abs(sinA) < 1e-6)
+            {
+                double xx = (deltaT.BasisX.X + 1.0) / 2.0;
+                double yy = (deltaT.BasisY.Y + 1.0) / 2.0;
+                double zz = (deltaT.BasisZ.Z + 1.0) / 2.0;
+
+                if (xx >= yy && xx >= zz)
+                {
+                    double nx = Math.Sqrt(Math.Max(0.0, xx));
+                    double ny = nx > 1e-10 ? deltaT.BasisX.Y / (2.0 * nx) : 0.0;
+                    double nz = nx > 1e-10 ? deltaT.BasisX.Z / (2.0 * nx) : 0.0;
+                    axis = new XYZ(nx, ny, nz);
+                }
+                else if (yy >= zz)
+                {
+                    double ny = Math.Sqrt(Math.Max(0.0, yy));
+                    double nx = ny > 1e-10 ? deltaT.BasisY.X / (2.0 * ny) : 0.0;
+                    double nz = ny > 1e-10 ? deltaT.BasisY.Z / (2.0 * ny) : 0.0;
+                    axis = new XYZ(nx, ny, nz);
+                }
+                else
+                {
+                    double nz = Math.Sqrt(Math.Max(0.0, zz));
+                    double nx = nz > 1e-10 ? deltaT.BasisZ.X / (2.0 * nz) : 0.0;
+                    double ny = nz > 1e-10 ? deltaT.BasisZ.Y / (2.0 * nz) : 0.0;
+                    axis = new XYZ(nx, ny, nz);
+                }
+
+                if (axis.GetLength() < 1e-10) { axis = XYZ.BasisZ; }
+                else axis = axis.Normalize();
+                return true;
+            }
+
+            double ax = (deltaT.BasisY.Z - deltaT.BasisZ.Y) / (2.0 * sinA);
+            double ay = (deltaT.BasisZ.X - deltaT.BasisX.Z) / (2.0 * sinA);
+            double az = (deltaT.BasisX.Y - deltaT.BasisY.X) / (2.0 * sinA);
+            axis = new XYZ(ax, ay, az);
+
+            if (axis.GetLength() < 1e-10) { axis = XYZ.BasisZ; return false; }
+            axis = axis.Normalize();
+            return true;
         }
 
         private static readonly Dictionary<string, string> _abbrevMap =
@@ -627,14 +703,14 @@ namespace PipeSystemTransfer.Infrastructure.Services
                         score += _typeKeywords.Contains(word) ? 10 : 1;
                 }
 
-                if (score > bestScore || best == null)
+                if (score > bestScore)
                 {
                     bestScore = score;
                     best = kvp.Value;
                 }
             }
 
-            return best;
+            return best ?? cache.Values.FirstOrDefault();
         }
 
 
