@@ -67,28 +67,28 @@ namespace PipeSystemTransfer.Infrastructure.Services
                     }
                 }
 
-                Report(onProgress, total, total, "Đang kết nối phần tử...");
-                using (var connectTx = new Transaction(_doc, "Connect MEP Elements"))
-                {
-                    ApplyFastFailureHandling(connectTx);
-                    connectTx.Start();
-                    try
-                    {
-                        ConnectAllElements(
-                            pipeSystem.Pipes, pipeIdMap,
-                            pipeSystem.Fittings, fittingIdMap,
-                            result.ErrorLog);
-                        connectTx.Commit();
-                    }
-                    catch (Exception ex)
-                    {
-                        connectTx.RollBack();
-                        result.ErrorLog.Add($"[Connect Tx] {ex.Message}");
-                    }
-                }
+                //Report(onProgress, total, total, "Đang kết nối phần tử...");
+                //using (var connectTx = new Transaction(_doc, "Connect MEP Elements"))
+                //{
+                //    ApplyFastFailureHandling(connectTx);
+                //    connectTx.Start();
+                //    try
+                //    {
+                //        ConnectAllElements(
+                //            pipeSystem.Pipes, pipeIdMap,
+                //            pipeSystem.Fittings, fittingIdMap,
+                //            result.ErrorLog);
+                //        connectTx.Commit();
+                //    }
+                //    catch (Exception ex)
+                //    {
+                //        connectTx.RollBack();
+                //        result.ErrorLog.Add($"[Connect Tx] {ex.Message}");
+                //    }
+                //}
 
                 result.Success = true;
-                result.JoinedConnectors = CountConnectedPairs(createdPipes, createdFittings);
+                //result.JoinedConnectors = CountConnectedPairs(createdPipes, createdFittings);
                 Report(onProgress, total, total, "Hoàn tất import!");
             }
             catch (Exception ex)
