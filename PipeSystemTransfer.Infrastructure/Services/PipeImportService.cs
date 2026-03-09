@@ -408,7 +408,10 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 var center   = ParseXYZ(dto.LocationPoint);
                 var T_target = ParseTransformDto(dto.Transform);
 
-              
+                var recomputedY = T_target.BasisZ.CrossProduct(T_target.BasisX);
+                if (recomputedY.GetLength() > 1e-10)
+                    T_target.BasisY = recomputedY.Normalize();
+
                 double det = T_target.BasisX.DotProduct(T_target.BasisY.CrossProduct(T_target.BasisZ));
                 bool needFacingFlip = false;
                 if (det < 0)
@@ -417,7 +420,15 @@ namespace PipeSystemTransfer.Infrastructure.Services
                     needFacingFlip = true;
                 }
 
-                if (TryExtractRotation(T_target, out var axis, out var angle) && Math.Abs(angle) > 1e-6)
+                var T_current = instance.GetTransform();
+
+                var currentY = T_current.BasisZ.CrossProduct(T_current.BasisX);
+                if (currentY.GetLength() > 1e-10)
+                    T_current.BasisY = currentY.Normalize();
+
+                var R_delta = ComputeRotationDelta(T_current, T_target);
+
+                if (TryExtractRotation(R_delta, out var axis, out var angle) && Math.Abs(angle) > 1e-6)
                 {
                     var rotAxis = Line.CreateBound(center, center + axis);
                     ElementTransformUtils.RotateElement(_doc, instance.Id, rotAxis, angle);
@@ -429,6 +440,26 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 }
             }
             catch { }
+        }
+
+       
+        private static Transform ComputeRotationDelta(Transform T_current, Transform T_target)
+        {
+            var delta = Transform.Identity;
+
+            delta.BasisX = T_current.BasisX.X * T_target.BasisX
+                         + T_current.BasisY.X * T_target.BasisY
+                         + T_current.BasisZ.X * T_target.BasisZ;
+
+            delta.BasisY = T_current.BasisX.Y * T_target.BasisX
+                         + T_current.BasisY.Y * T_target.BasisY
+                         + T_current.BasisZ.Y * T_target.BasisZ;
+
+            delta.BasisZ = T_current.BasisX.Z * T_target.BasisX
+                         + T_current.BasisY.Z * T_target.BasisY
+                         + T_current.BasisZ.Z * T_target.BasisZ;
+
+            return delta;
         }
 
         private static void ApplyFastFailureHandling(Transaction tx)
