@@ -27,7 +27,9 @@ namespace PipeSystemTransfer.Infrastructure.Services
             };
 
             var pipes    = CollectAll<Pipe>(typeof(Pipe), null);
-            var fittings = CollectAll<FamilyInstance>(typeof(FamilyInstance), BuiltInCategory.OST_PipeFitting);
+            var fittings = CollectAll<FamilyInstance>(typeof(FamilyInstance), BuiltInCategory.OST_PipeFitting)
+                           .Where(fi => fi.SuperComponent == null)
+                           .ToList();
 
             int total   = pipes.Count + fittings.Count;
             int current = 0;

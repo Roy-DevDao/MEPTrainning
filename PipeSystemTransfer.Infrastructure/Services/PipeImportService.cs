@@ -52,9 +52,11 @@ namespace PipeSystemTransfer.Infrastructure.Services
                             pipeSystem.Fittings, levelMap, symbolCache, fittingCache, result,
                             onProgress, ref current, total, createdFittings, fittingIdMap);
 
+                        var snapMap = BuildFittingConnectorSnapMap(pipeSystem.Fittings, fittingIdMap);
+
                         result.CreatedPipes = CreatePipes(
                             pipeSystem.Pipes, pipeTypeMap, levelMap, systemTypeMap,
-                            result, onProgress, ref current, total, createdPipes, pipeIdMap);
+                            snapMap, result, onProgress, ref current, total, createdPipes, pipeIdMap);
 
                         tx.Commit();
                     }
@@ -127,6 +129,7 @@ namespace PipeSystemTransfer.Infrastructure.Services
             Dictionary<string, PipeType> pipeTypeMap,
             Dictionary<string, Level> levelMap,
             Dictionary<string, PipingSystemType> systemTypeMap,
+            Dictionary<string, List<(XYZ jsonPos, XYZ actualPos)>> snapMap,
             ImportResult result,
             Action<ProgressReport> onProgress, ref int current, int total,
             List<Pipe> createdPipes,
@@ -161,12 +164,19 @@ namespace PipeSystemTransfer.Infrastructure.Services
                     var start = ParseXYZ(dto.StartPoint);
                     var end   = ParseXYZ(dto.EndPoint);
 
-                    if (start.DistanceTo(end) < 0.001)
+                    if (snapMap.TryGetValue(dto.Id, out var snaps))
                     {
-                        result.FailedElements++;
-                        result.ErrorLog.Add($"[Pipe {dto.Id}] Chiều dài < 0.001 ft, bỏ qua");
-                        continue;
+                        foreach (var (jsonPos, actualPos) in snaps)
+                        {
+                            if (jsonPos.DistanceTo(start) <= jsonPos.DistanceTo(end))
+                                start = actualPos;
+                            else
+                                end = actualPos;
+                        }
                     }
+
+                    if (start.DistanceTo(end) < 0.01)
+                        continue;
 
                     var pipe = Pipe.Create(_doc,
                         systemType?.Id ?? ElementId.InvalidElementId,
@@ -193,6 +203,42 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 Report(onProgress, ++current, total, $"Tạo ống {count}/{pipes.Count}");
             }
             return count;
+        }
+
+        private Dictionary<string, List<(XYZ jsonPos, XYZ actualPos)>> BuildFittingConnectorSnapMap(
+            List<PipeFittingDto> fittingDtos,
+            Dictionary<string, FamilyInstance> fittingIdMap)
+        {
+            var map = new Dictionary<string, List<(XYZ, XYZ)>>();
+
+            foreach (var fittingDto in fittingDtos)
+            {
+                if (!fittingIdMap.TryGetValue(fittingDto.Id, out var fi) || fi == null) continue;
+
+                var cm = fi.MEPModel?.ConnectorManager;
+                if (cm == null) continue;
+
+                var actualById = new Dictionary<int, XYZ>();
+                foreach (Connector c in cm.Connectors)
+                    if (c.Domain == Domain.DomainPiping)
+                        actualById[c.Id] = c.Origin;
+
+                foreach (var connDto in fittingDto.Connectors)
+                {
+                    if (string.IsNullOrEmpty(connDto.ConnectedToId)) continue;
+                    if (!actualById.TryGetValue(connDto.ConnectorId, out var actualPos)) continue;
+
+                    var jsonPos = ParseXYZ(connDto.Origin);
+                    var pipeId  = connDto.ConnectedToId;
+
+                    if (!map.ContainsKey(pipeId))
+                        map[pipeId] = new List<(XYZ, XYZ)>();
+
+                    map[pipeId].Add((jsonPos, actualPos));
+                }
+            }
+
+            return map;
         }
 
         private int CreateFittings(List<PipeFittingDto> fittings,
@@ -412,12 +458,10 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 if (recomputedY.GetLength() > 1e-10)
                     T_target.BasisY = recomputedY.Normalize();
 
-                double det = T_target.BasisX.DotProduct(T_target.BasisY.CrossProduct(T_target.BasisZ));
-                bool needFacingFlip = false;
-                if (det < 0)
+     
+                if (dto.FacingFlipped || dto.Mirrored)
                 {
-                    T_target.BasisX = -T_target.BasisX;
-                    needFacingFlip = true;
+                    try { instance.flipFacing(); } catch { }
                 }
 
                 var T_current = instance.GetTransform();
@@ -432,11 +476,6 @@ namespace PipeSystemTransfer.Infrastructure.Services
                 {
                     var rotAxis = Line.CreateBound(center, center + axis);
                     ElementTransformUtils.RotateElement(_doc, instance.Id, rotAxis, angle);
-                }
-
-                if (needFacingFlip)
-                {
-                    try { instance.flipFacing(); } catch { }
                 }
             }
             catch { }
