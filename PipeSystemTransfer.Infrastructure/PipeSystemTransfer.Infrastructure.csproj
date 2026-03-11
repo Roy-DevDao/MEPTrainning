@@ -81,6 +81,12 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Helpers\ConnectorUtils.cs" />
+    <Compile Include="Helpers\FamilySymbolMatcher.cs" />
+    <Compile Include="Helpers\FittingTransformHelper.cs" />
+    <Compile Include="Helpers\PipeElementParser.cs" />
+    <Compile Include="Helpers\RevitElementCache.cs" />
+    <Compile Include="Helpers\SilentFailurePreprocessor.cs" />
     <Compile Include="Mapper\PipeMapper.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Services\JsonService.cs" />

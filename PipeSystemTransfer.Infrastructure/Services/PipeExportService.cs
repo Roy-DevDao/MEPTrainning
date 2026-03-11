@@ -34,23 +34,29 @@ namespace PipeSystemTransfer.Infrastructure.Services
             int total   = pipes.Count + fittings.Count;
             int current = 0;
 
-            Report(onProgress, 0, total, "Chuẩn bị...");
+            ProgressReport.Report(onProgress, 0, total, "Chuẩn bị...");
 
             for (int i = 0; i < pipes.Count; i++)
             {
                 try { result.Pipes.Add(PipeMapper.ToDto(pipes[i])); }
-                catch { }
-                Report(onProgress, ++current, total, $"Đọc ống {i + 1}/{pipes.Count}");
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Export Pipe {pipes[i].Id}] {ex.GetType().Name}: {ex.Message}");
+                }
+                ProgressReport.Report(onProgress, ++current, total, $"Đọc ống {i + 1}/{pipes.Count}");
             }
 
             for (int i = 0; i < fittings.Count; i++)
             {
                 try { result.Fittings.Add(PipeMapper.ToFittingDto(fittings[i])); }
-                catch {  }
-                Report(onProgress, ++current, total, $"Đọc fitting {i + 1}/{fittings.Count}");
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Export Fitting {fittings[i].Id}] {ex.GetType().Name}: {ex.Message}");
+                }
+                ProgressReport.Report(onProgress, ++current, total, $"Đọc fitting {i + 1}/{fittings.Count}");
             }
 
-            Report(onProgress, total, total, "Hoàn tất đọc dữ liệu.");
+            ProgressReport.Report(onProgress, total, total, "Hoàn tất đọc dữ liệu.");
             return result;
         }
 
@@ -60,11 +66,6 @@ namespace PipeSystemTransfer.Infrastructure.Services
             if (category.HasValue)
                 collector = collector.OfCategory(category.Value);
             return collector.Cast<T>().ToList();
-        }
-
-        private static void Report(Action<ProgressReport> onProgress, int current, int total, string message)
-        {
-            onProgress?.Invoke(new ProgressReport { Current = current, Total = total, Message = message });
         }
     }
 }
